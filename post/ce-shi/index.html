@@ -1,0 +1,244 @@
+<html>
+  <head>
+    <meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Hadoop - MapReduce架构详解 | Gridea</title>
+<link rel="shortcut icon" href="https://heqins.github.io/favicon.ico?v=1694681085784">
+<link href="https://cdn.jsdelivr.net/npm/remixicon@2.3.0/fonts/remixicon.css" rel="stylesheet">
+<link rel="stylesheet" href="https://heqins.github.io/styles/main.css">
+<link rel="alternate" type="application/atom+xml" title="Hadoop - MapReduce架构详解 | Gridea - Atom Feed" href="https://heqins.github.io/atom.xml">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Droid+Serif:400,700">
+
+
+
+    <meta name="description" content="MapReduce执行整体架构
+
+这里先贴一下论文里的原话：
+The MapReduce library in the user program first
+splits the input files into M pieces of t..." />
+    <meta name="keywords" content="" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.10.0/katex.min.css">
+    <script src="//cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.5.1/build/highlight.min.js"></script>
+  </head>
+  <body>
+    <div class="main">
+      <div class="main-content">
+        <div class="site-header">
+  <a href="https://heqins.github.io">
+  <img class="avatar" src="https://heqins.github.io/images/avatar.png?v=1694681085784" alt="">
+  </a>
+  <h1 class="site-title">
+    Gridea
+  </h1>
+  <p class="site-description">
+    温故而知新
+  </p>
+  <div class="menu-container">
+    
+      
+        <a href="/" class="menu">
+          首页
+        </a>
+      
+    
+      
+        <a href="/archives" class="menu">
+          归档
+        </a>
+      
+    
+      
+        <a href="/tags" class="menu">
+          标签
+        </a>
+      
+    
+      
+        <a href="/post/about" class="menu">
+          关于
+        </a>
+      
+    
+  </div>
+  <div class="social-container">
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+  </div>
+</div>
+
+        <div class="post-detail">
+          <article class="post">
+            <h2 class="post-title">
+              Hadoop - MapReduce架构详解
+            </h2>
+            <div class="post-info">
+              <span>
+                2023-09-14
+              </span>
+              <span>
+                7 min read
+              </span>
+              
+            </div>
+            
+            <div class="post-content-wrapper">
+              <div class="post-content" v-pre>
+                <h2 id="mapreduce执行整体架构">MapReduce执行整体架构</h2>
+<figure data-type="image" tabindex="1"><img src="https://heqins.github.io/post-images/1694679458961.jpg" alt="" loading="lazy"></figure>
+<p>这里先贴一下论文里的原话：</p>
+<pre><code>The MapReduce library in the user program first
+splits the input files into M pieces of typically 16
+megabytes to 64 megabytes (MB) per piece (controllable by the user via an optional parameter). It
+then starts up many copies of the program on a cluster of machines.
+
+2. One of the copies of the program is special – the
+master. The rest are workers that are assigned work
+by the master. There are M map tasks and R reduce
+tasks to assign. The master picks idle workers and
+assigns each one a map task or a reduce task.
+
+3. A worker who is assigned a map task reads the
+contents of the corresponding input split. It parses
+key/value pairs out of the input data and passes each
+pair to the user-defined Map function. The intermediate key/value pairs produced by the Map function
+are buffered in memory.
+
+4. Periodically, the buffered pairs are written to local
+disk, partitioned into R regions by the partitioning
+function. The locations of these buffered pairs on
+the local disk are passed back to the master, who
+is responsible for forwarding these locations to the
+reduce workers.
+
+5. When a reduce worker is notified by the master
+about these locations, it uses remote procedure calls
+to read the buffered data from the local disks of the
+map workers. When a reduce worker has read all intermediate data, it sorts it by the intermediate keys
+so that all occurrences of the same key are grouped
+together. The sorting is needed because typically
+many different keys map to the same reduce task. If
+the amount of intermediate data is too large to fit in
+memory, an external sort is used.
+
+6. The reduce worker iterates over the sorted intermediate data and for each unique intermediate key encountered, it passes the key and the corresponding
+set of intermediate values to the user’s Reduce function. The output of the Reduce function is appended
+to a final output file for this reduce partition.
+</code></pre>
+<p>简单理解一下，首先用户Client将输入数据切分为多个块，不同的worker节点读取所有切块的输入数据，根据用户指定的map functio进行映射操作，产生key/value键值对并写入到本地的临时文件中；worker随后将这些键值对文件的信息发送给master，master随即通知给个负责执行reduce task的worker，worker通过远程传输的方式读取map task所在节点上的这些文件，reduce worker读取数据完毕后执行sort操作，将所有拥有相同key的键值对（形如&lt;key,List<Value>&gt;）放在一起。随后reduce worker执行用户定义的reduce function并将合并结果输出到指定的文件中</p>
+<h3 id="map-worker和reduce-worker是固定还是每次随即分配的">map worker和reduce worker是固定还是每次随即分配的？</h3>
+<p>在 Hadoop 中，MapReduce 任务的执行涉及到 Master 节点（例如，JobTracker 或 ResourceManager）和 Worker 节点（例如，TaskTracker 或 NodeManager），它们的角色是固定的，但具体的实例可以是动态变化的。</p>
+<p><strong>Master 节点：</strong><br>
+在 Hadoop 1.0 版本中，有一个 JobTracker 负责管理 MapReduce 作业的执行。这个 JobTracker 实例通常是在集群启动时启动的，而且在整个集群生命周期内是固定的。</p>
+<p>在 Hadoop 2.x 版本以后，引入了 ResourceManager，它负责集群的资源管理。与 JobTracker 不同，ResourceManager 是一个长期运行的服务，也是集群启动时启动的，通常是固定的。<br>
+ApplicationMaster 是管理每个作业的执行的组件，每个作业都有一个独立的 ApplicationMaster 实例，由 ResourceManager 分配。因此，ApplicationMaster 的实例数会根据作业的数量动态变化。</p>
+<p><strong>Worker 节点：</strong><br>
+在 Hadoop 1.0 版本中，有多个 TaskTracker 实例，每个 TaskTracker 负责执行 Map 和 Reduce 任务。这些 TaskTracker 实例在集群节点上运行，并且在整个集群生命周期内是固定的，它们一直监听任务分配。</p>
+<p>在 Hadoop 2.x 版本以后，有多个 NodeManager 实例，每个 NodeManager 负责管理节点上的容器，其中包括运行 Map 和 Reduce 任务的容器。与 TaskTracker 不同，NodeManager 是一个长期运行的服务，会一直监听资源管理器的指令。</p>
+<p>总的来说，Master 节点的实例通常是固定的，而 Worker 节点的实例会动态变化，根据作业的需求分配任务。在 Hadoop 2.x 版本以后，引入了更灵活的资源管理和任务执行模型，提高了集群的可伸缩性和效率。</p>
+<h3 id="combiner是什么">combiner是什么？</h3>
+<p>在 Hadoop 和 MapReduce 编程模型中，Combiner（合并器）是一种用于优化数据处理的中间步骤。Combiner 可以在数据被传输到 Reduce 阶段之前，在 Map 阶段对部分数据进行本地合并和汇总。其主要目的是减少数据传输和降低网络开销，以提高 MapReduce 作业的性能。</p>
+<p><strong>Combiner 的工作原理如下：</strong></p>
+<p>Map 阶段：在 Map 阶段，Mapper 任务生成键值对（key-value pairs）作为输出，这些键值对通常是无序的。<br>
+Combiner 阶段：Combiner 是一个可选的中间步骤，它在 Map 任务本地对 Mapper 输出的键值对进行合并和汇总。Combiner 接收相同键的多个值，并将它们合并为一个或多个键值对。这个过程是在 Mapper 任务的本地执行的，不涉及网络传输。<br>
+Shuffle 和 Sort 阶段：经过 Combiner 阶段的处理后，数据进入 Shuffle 和 Sort 阶段。在这个阶段，数据被分区、排序并传输到 Reduce 任务。<br>
+Reduce 阶段：在 Reduce 阶段，数据再次按照键进行分组，并传递给 Reduce 函数进行进一步的处理。</p>
+<p><strong>Combiner 的主要优点包括：</strong></p>
+<p>减少数据传输：由于 Combiner 在 Map 任务本地执行合并，它可以大幅减少需要传输到 Reduce 任务的数据量，降低了网络开销。<br>
+降低 Reduce 任务负载：Combiner 可以在 Map 阶段就进行部分聚合，从而降低了 Reduce 任务的工作量，提高了整体性能。<br>
+提高作业性能：通过减少数据传输和降低 Reduce 任务的负载，Combiner 可以显著提高 MapReduce 作业的性能。</p>
+<p>需要注意的是，Combiner 只适用于满足结合律（Associative）和可交换律（Commutative）的操作，因为它执行的是局部合并。不适用于所有情况，因此在应用 Combiner 时需要谨慎选择合适的操作。 Combiner 是 MapReduce 编程中的一种性能优化工具，可以根据具体的作业和数据特性来决定是否使用以及如何使用。</p>
+
+              </div>
+              <div class="toc-container">
+                <ul class="markdownIt-TOC">
+<li>
+<ul>
+<li><a href="#mapreduce%E6%89%A7%E8%A1%8C%E6%95%B4%E4%BD%93%E6%9E%B6%E6%9E%84">MapReduce执行整体架构</a>
+<ul>
+<li><a href="#map-worker%E5%92%8Creduce-worker%E6%98%AF%E5%9B%BA%E5%AE%9A%E8%BF%98%E6%98%AF%E6%AF%8F%E6%AC%A1%E9%9A%8F%E5%8D%B3%E5%88%86%E9%85%8D%E7%9A%84">map worker和reduce worker是固定还是每次随即分配的？</a></li>
+<li><a href="#combiner%E6%98%AF%E4%BB%80%E4%B9%88">combiner是什么？</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+              </div>
+            </div>
+          </article>
+        </div>
+
+        
+          <div class="next-post">
+            <div class="next">下一篇</div>
+            <a href="https://heqins.github.io/post/hello-gridea/">
+              <h3 class="post-title">
+                Hello Gridea
+              </h3>
+            </a>
+          </div>
+        
+
+        
+
+        <div class="site-footer">
+  Powered by <a href="https://github.com/getgridea/gridea" target="_blank">Gridea</a>
+  <a class="rss" href="https://heqins.github.io/atom.xml" target="_blank">
+    <i class="ri-rss-line"></i> RSS
+  </a>
+</div>
+
+      </div>
+    </div>
+
+    <script>
+      hljs.initHighlightingOnLoad()
+
+      let mainNavLinks = document.querySelectorAll(".markdownIt-TOC a");
+
+      // This should probably be throttled.
+      // Especially because it triggers during smooth scrolling.
+      // https://lodash.com/docs/4.17.10#throttle
+      // You could do like...
+      // window.addEventListener("scroll", () => {
+      //    _.throttle(doThatStuff, 100);
+      // });
+      // Only not doing it here to keep this Pen dependency-free.
+
+      window.addEventListener("scroll", event => {
+        let fromTop = window.scrollY;
+
+        mainNavLinks.forEach((link, index) => {
+          let section = document.getElementById(decodeURI(link.hash).substring(1));
+          let nextSection = null
+          if (mainNavLinks[index + 1]) {
+            nextSection = document.getElementById(decodeURI(mainNavLinks[index + 1].hash).substring(1));
+          }
+          if (section.offsetTop <= fromTop) {
+            if (nextSection) {
+              if (nextSection.offsetTop > fromTop) {
+                link.classList.add("current");
+              } else {
+                link.classList.remove("current");    
+              }
+            } else {
+              link.classList.add("current");
+            }
+          } else {
+            link.classList.remove("current");
+          }
+        });
+      });
+
+    </script>
+  </body>
+</html>
